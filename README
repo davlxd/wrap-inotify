@@ -1,0 +1,57 @@
+Table of contents :
+ 1. Introduction
+ 2. Details
+ 3. Usage
+ 4. Compatibility
+ 5. Contacts
+ 6. About License
+
+
+1.  Introduction
+----------------
+    Recursively monitor every sub-directories, dynamically add/remove
+    monitors if changes applied to sub-directories itself.
+
+2.  Details
+-----------
+    o A child process is forked at first, using FIFO for communication.
+    o Iterate all sub-directories and add them to a doubly linked list.
+    o Polling all sub-dirs's inotify fd via select()
+    o If changes applied to dirs, recursively add or remove nodes
+    o Symbolic links are followed, hidden files/dirs are ignored, you can
+      change this via modifying code
+
+3.  Usage
+---------
+    #include "wrap-inotify.h"
+
+    int monitors_init(const char *root_path, uint32_t mask, int *fd);
+
+        This function fork child process, initiate data structure and start
+        polling.
+        "root_path" itself is not monitored, so if any changes applied to
+        it, process may get stuck.
+
+        root_path -> path you want to watch
+        mask -> watch mask argument for inotify_add_watch()
+        fd -> file descriptor from which you can read() if somthing happens
+
+    int monitors_cleanup();
+
+        This function terminate child process, cleanup everythng.
+
+4.  Compatibility
+-----------------
+    POSIX.1
+
+5.  Contacts
+------------
+    Author's E-mail: edl.eppc@gmail.com
+    Author's Site: http://lxd.me
+
+6.  About License
+-----------------
+    You are free to use this code.
+
+
+
