@@ -2,9 +2,8 @@ Table of contents :
  1. Introduction
  2. Details
  3. Usage
- 4. Compatibility
- 5. Contacts
- 6. About License
+ 4. Contacts
+ 5. About License
 
 
 1.  Introduction
@@ -38,18 +37,14 @@ Table of contents :
 
     int monitors_cleanup();
 
-        This function terminate child process, cleanup everythng.
+        This function terminate child process, cleanup everything.
 
-4.  Compatibility
------------------
-    POSIX.1
-
-5.  Contacts
+4.  Contacts
 ------------
     Author's E-mail: edl.eppc@gmail.com
     Author's Site: http://lxd.me
 
-6.  About License
+5.  About License
 -----------------
     You are free to use this code.
 
