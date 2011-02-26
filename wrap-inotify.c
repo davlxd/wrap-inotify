@@ -312,7 +312,7 @@ static int strip_path(const char *path, char *new_path)
     fprintf(stderr, "@strip_path(): strip fails, path is NULL\n");
     return 1;
   }
-  if (path[strlen(path)] == '/') {
+  if (path[strlen(path)-1] == '/') {
     strncpy(new_path, path, strlen(path)-1);
     new_path[strlen(new_path)] = 0;
     return 2;
