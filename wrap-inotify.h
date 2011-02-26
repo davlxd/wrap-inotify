@@ -22,6 +22,8 @@
 #ifndef _WRAP_INOTIFY_H_
 #define _WRAP_INOTIFY_H_
 
+//#include "log.h"
+
 #include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -52,7 +54,7 @@ typedef struct monitor
   int wd;
 
   struct monitor *p;  //previous one
-  struct monitor *n;  //next one, as u c, it is a doubly linked list
+  struct monitor *n;  //next one, as u c, it is a ddlink
 } monitor;
 
 
@@ -75,6 +77,7 @@ int monitors_init(const char *root_path, uint32_t mask, int *fd);
 int monitors_cleanup();
 
 static int monitors_poll();
+static void sig_child(int signo);
 
 static int verify_path(const char *path);
 static int strip_path(const char *path, char *p);

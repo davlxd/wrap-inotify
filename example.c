@@ -41,16 +41,12 @@ int main()
 	perror("@main(): fgets fails");
 	exit(1);
       }
+      /* stdin type 'exit' to termitate monitor process */
       if (0 == strncmp(buffer, "exit", 4)) {
-	if(monitors_cleanup()) {
-	  perror("@main(): monitors_cleanup() fails");
-	  exit(1);
-	}
-	if(0 > close(mfd)) {
-	  perror("@main(): close mfd fails");
-	  exit(1);
-	}
-	return 0;
+      	if(monitors_cleanup()) {
+      	  perror("@main(): monitors_cleanup() fails");
+      	  exit(1);
+      	}
       }
     }
 

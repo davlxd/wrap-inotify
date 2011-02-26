@@ -33,6 +33,15 @@
 int monitors_init(const char *root_path, uint32_t m, int *fd)
 {
 
+  struct sigaction act, oact;
+  act.sa_handler = sig_child;
+  sigemptyset(&act.sa_mask);
+  act.sa_flags = 0;
+  if ( 0 > sigaction(SIGCHLD, &act, &oact)) {
+    perror("@monitors_init() @parent: sigaction fails");
+    return 0;
+  }
+  
   /* establish FIFO */
   if ((0 > mkfifo(FIFO0, S_IWUSR | S_IRUSR | S_IRGRP | S_IWGRP))
        && (errno != EEXIST)) {
@@ -564,3 +573,13 @@ static int deepin(char *path)
   return 0;
 }
 
+static void sig_child(int signo)
+{
+  pid_t pid;
+  int stat;
+
+  if (0 > wait(&stat))
+    perror("@sig_child(): wait child fails.");
+
+  return ;
+}
