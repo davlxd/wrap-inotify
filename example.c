@@ -11,7 +11,7 @@ int main()
   int n;
   fd_set rset;
   char buffer[1024];
-  char *path = "/home/foo";
+  char *path = "/home/i/foo";
   int mfd;
   int maxfd;
   
@@ -19,7 +19,7 @@ int main()
 		    IN_MODIFY|IN_CREATE|IN_DELETE|
 		    IN_MOVED_FROM|IN_MOVED_TO, &mfd)) {
     fprintf(stderr,
-	    "@main(): monitors_init() fails\n");
+	    "@main(): monitors_init() failed\n");
     exit(0);
   }
 
@@ -31,20 +31,20 @@ int main()
 
     /* I/O polling */
     if (0 > select(maxfd+1, &rset, NULL, NULL, NULL)) {
-      perror("@main(): select fails");
+      perror("@main(): select failed");
       exit(1);
     }
 
     /* if come from stdin */
     if (FD_ISSET(fileno(stdin), &rset)) {
       if (!fgets(buffer, 1024, stdin)) {
-	perror("@main(): fgets fails");
+	perror("@main(): fgets failed");
 	exit(1);
       }
       /* stdin type 'exit' to termitate monitor process */
       if (0 == strncmp(buffer, "exit", 4)) {
       	if(monitors_cleanup()) {
-      	  perror("@main(): monitors_cleanup() fails");
+      	  perror("@main(): monitors_cleanup() failed");
       	  exit(1);
       	}
       }
@@ -53,7 +53,7 @@ int main()
     /* if come from file descriptor wrap-inotify set */
     if (FD_ISSET(mfd, &rset)) {
       if (0 > (n = read(mfd, buffer, 1024))) {
-	perror("@main(): read() fails");
+	perror("@main(): read() failed");
 	exit(1);
       }
       buffer[n] = 0;

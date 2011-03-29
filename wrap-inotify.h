@@ -22,8 +22,8 @@
 #ifndef _WRAP_INOTIFY_H_
 #define _WRAP_INOTIFY_H_
 
-//#include "log.h"
-
+#define _XOPEN_SOURCE 500
+#include <ftw.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -83,7 +83,8 @@ static int verify_path(const char *path);
 static int strip_path(const char *path, char *p);
 static int join_fname(const monitor *this_monitor,
 		      const char *fname);
-static int monitor_connect(const char *path);
+static int monitor_connect(const char *path, const struct stat *sb, 
+			   int typeflag, struct FTW *fb);
 static int monitor_connect_via_fpath(const monitor *this_monitor,
 				   const char *fname);
 static int monitor_disconnect(monitor *this_monitor);

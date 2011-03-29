@@ -38,36 +38,36 @@ int monitors_init(const char *root_path, uint32_t m, int *fd)
   sigemptyset(&act.sa_mask);
   act.sa_flags = 0;
   if ( 0 > sigaction(SIGCHLD, &act, &oact)) {
-    perror("@monitors_init() @parent: sigaction fails");
+    perror("@monitors_init() @parent: sigaction failed");
     return 0;
   }
   
   /* establish FIFO */
   if ((0 > mkfifo(FIFO0, S_IWUSR | S_IRUSR | S_IRGRP | S_IWGRP))
        && (errno != EEXIST)) {
-    perror("@monitors_init(): mkfifo0 fails");
+    perror("@monitors_init(): mkfifo0 failed");
     return 1;
   }
   if ((0 > mkfifo(FIFO1, S_IWUSR | S_IRUSR | S_IRGRP | S_IWGRP))
        && (errno != EEXIST)) {
-    perror("@monitors_init(): mkfifo1 fails");
+    perror("@monitors_init(): mkfifo1 failed");
     return 1;
   }
 
   /* fork routine */
   if ((pid = fork()) < 0) {
-    perror("@monitors_init(): fork() fails");
+    perror("@monitors_init(): fork() failed");
     return 0;
    } else if (pid > 0) {  //parent
 
     /* open FIFO, parent and child should following same order
      * in case deadlock */
     if (0 > (rfd = open(FIFO0, O_RDONLY, 0))) {
-      perror("@monitors_init() @parent: open fifo0 for read fails");
+      perror("@monitors_init() @parent: open fifo0 for read failed");
       return 1;
     }
     if (0 > (wfd = open(FIFO1, O_WRONLY, 0))) {
-      perror("@monitors_init() @parent: ppen fifo1 for write fails");
+      perror("@monitors_init() @parent: ppen fifo1 for write failed");
       return 1;
     }
     
@@ -78,18 +78,18 @@ int monitors_init(const char *root_path, uint32_t m, int *fd)
     
     /* first FIFO0, second FIFO1, order is important here */
     if (0 > (wfd = open(FIFO0, O_WRONLY, 0))) {
-      perror("@monitors_init() @child: open fifo0 for write fails");
+      perror("@monitors_init() @child: open fifo0 for write failed");
       exit(1);
     }
     if (0 > (rfd = open(FIFO1, O_RDONLY, 0))) {
-      perror("@monitors_init() @child: open fifo1 for read fails");
+      perror("@monitors_init() @child: open fifo1 for read failed");
       exit(1);
     }
 
     /* copy write fd to standard output */
     if (wfd != STDOUT_FILENO) {
       if (dup2(wfd, STDOUT_FILENO) != STDOUT_FILENO) {
-    	perror("@monitors_init(), @child: dup2() fails");
+    	perror("@monitors_init(), @child: dup2() failed");
     	exit(1);
       }
       close(wfd);
@@ -100,29 +100,23 @@ int monitors_init(const char *root_path, uint32_t m, int *fd)
     FD_ZERO(&set);
     FD_SET(rfd, &set);
   
-    if (verify_path(root_path)) {
-      fprintf(stderr, "@monitor_init() @child: verify_path(%s) fails\n",
-	      root_path);
-      return 1;
-    }
-    strip_path(root_path, fullpath);
 
     /* the first-time, iteration, initial doubly linked list */
-    if (deepin(fullpath)) {
-      fprintf(stderr, "@monitor_init() @child: deepin recurse fails\n");
+    if (nftw(root_path, monitor_connect, 1, FTW_DEPTH) != 0) {
+      perror("@monitor_init() @child: nftw() failed");
       return 1;
     }
     tail_monitor->n = NULL;
 
     /* polling all sub-dirs now, child process should block here */
     if (monitors_poll()) {
-      fprintf(stderr, "@monitor_init() @child: monitors_poll() fails\n");
-      exit(1);
+      fprintf(stderr, "@monitor_init() @child: monitors_poll() failed\n");
+      return 1;
     }
 
     /* exit routine, not necessary */
     if (0 > close(rfd)) {
-      perror("@monitors_init() @child: close rfd fails");
+      perror("@monitors_init() @child: close rfd failed");
       return 1;
     }
     FD_CLR(rfd, &set);
@@ -147,7 +141,7 @@ static int monitors_poll()
       if (errno == EINTR) {
 	return 0;
       } else {
-	perror("@monitors_poll(): select fails");
+	perror("@monitors_poll(): select failed");
 	return 1;
       }
     }
@@ -156,7 +150,7 @@ static int monitors_poll()
      * and send 'exit' to child process, we read it and confirm */
     if (FD_ISSET(rfd, &rset)) {
       if (0 > (len = read(rfd, buf, BUF_LEN))) {
-	perror("@monitors_poll(): read from rfd fails");
+	perror("@monitors_poll(): read from rfd failed");
 	return 1;
       }
       buf[len] = 0;
@@ -176,7 +170,7 @@ static int monitors_poll()
 	 temp_monitor = temp_monitor->p) {
       if (FD_ISSET(temp_monitor->fd, &rset)) {
 	if (0 > (len = read(temp_monitor->fd, buf, BUF_LEN))) {
-	  perror("@monitors_poll(): read fails");
+	  perror("@monitors_poll(): read failed");
 	  return 1;
 	}
 	i = 0;
@@ -195,7 +189,7 @@ static int monitors_poll()
 		printf("created ");
 		if (monitor_connect_via_fpath(temp_monitor, event->name)) {
 		  fprintf(stderr,
-			  "@minitors_poll(): monitor_con_via_fname(%s, %s)",
+			  "@minitors_poll(): monitor_con_via_fname(%s, %s) failed\n",
 			  temp_monitor->pathname,
 			  event->name);
 		  return 1;
@@ -273,77 +267,27 @@ static int monitors_poll()
   }  //end while(1)
 }  //end function
 
-  
-/* make sure root path is valid */
-static int verify_path(const char *path)
-{
-  struct stat statbuf;
-  
-  if (!path) {
-    fprintf(stderr, "@verify_path(): path is NULL, verify fails\n");
-    return 1;
-  } else if (stat(path, &statbuf) < 0) {
-    if (errno == ENOENT)
-      perror("@verify_path(): no such path");
-    else
-      perror("@verify_path(): stat error");
-    return 1;
-  }
-
-  if (!S_ISDIR(statbuf.st_mode)) {
-    fprintf(stderr, "@verify_path(): path --%s-- is valid, "\
-	    "but not a dir\n", path);
-    return 1;
-  }
-
-  return 0;
-}
-
-
-/* turn  /foo/fee/ into  /foo/fee
- *
- * return:1 -> error
- * return:0 -> nothing happens
- * return:2 -> strip happens
- */
-static int strip_path(const char *path, char *new_path)
-{
-  if (!path) {
-    fprintf(stderr, "@strip_path(): strip fails, path is NULL\n");
-    return 1;
-  }
-  if (path[strlen(path)-1] == '/') {
-    strncpy(new_path, path, strlen(path)-1);
-    new_path[strlen(new_path)] = 0;
-    return 2;
-  } else {
-    strncpy(new_path, path, strlen(path));
-    new_path[strlen(path)] = 0;
-    return 0;
-  }
-  return 0;
-}
 
 /* terminate child process, send 'exit' to child, then close
  * unnecessary fds */
 int monitors_cleanup()
 {
   if ( 4 != write(wfd, "exit", 4)) {
-    perror("@monitors_cleanup(): write exit to wfd fails");
+    perror("@monitors_cleanup(): write exit to wfd failed");
     return 1;
   }
   
   if (0 > close(wfd)) {
-    perror("@monitors_cleanup(): close wfd fails");
+    perror("@monitors_cleanup(): close wfd failed");
     return 1;
   }
   
   if (0 > unlink(FIFO0)) {
-    perror("@monitors_cleanup(): unlink FIFO0 fails");
+    perror("@monitors_cleanup(): unlink FIFO0 failed");
     return 1;
   }
   if (0 > unlink(FIFO1)) {
-    perror("@minitors_cleanup(): unlink FIFO1 fails");
+    perror("@minitors_cleanup(): unlink FIFO1 failed");
     return 1;
   }
 
@@ -382,20 +326,20 @@ static int join_fname(const monitor *this_monitor,
 
 /* called when a directory is created or moved in at current
  * monitoring directory,
- * iteration deepin() should be used here because this
+ * iteration nftw() should be used here because this
  * new directory may still contain sub-directory*/
 static int monitor_connect_via_fpath(const monitor *this_monitor,
 				   const char *fname)
 {
   if (join_fname(this_monitor, fname)) {
     fprintf(stderr,
-	    "@monitor_con_via_fpath(): join_name(%s, %s) fails.\n",
+	    "@monitor_con_via_fpath(): join_name(%s, %s) failed\n",
 	    this_monitor->pathname, fname);
     return 1;
   }
   
-  if (deepin(fullpath)) {
-    fprintf(stderr, "@monitor_con_via_fpath(): deepin recurse fails\n");
+  if (nftw(fullpath, monitor_connect, 1, FTW_DEPTH) != 0) {
+    perror("@monitor_con_via_fpath(): nftw() failed");
     return 1;
   }
   tail_monitor->n = NULL;
@@ -405,9 +349,13 @@ static int monitor_connect_via_fpath(const monitor *this_monitor,
   
 
 /* create a linked list node, then add it to linked list */
-static int monitor_connect(const char *path)
+static int monitor_connect(const char *path, const struct stat *sb,
+			   int typeflag, struct FTW *fb)
 {
 
+  if (!S_ISDIR(sb->st_mode))
+    return 0;
+  
   /* create part */
   monitor *temp_monitor;
   temp_monitor = (monitor*)calloc(1, sizeof(monitor));
@@ -459,7 +407,7 @@ static int monitor_disconnect_via_fpath(const monitor *this_monitor,
   
   if (join_fname(this_monitor, fname)) {
     fprintf(stderr,
-	    "@monitor_con_via_fpath(): join_name(%s, %s) fails.\n",
+	    "@monitor_con_via_fpath(): join_name(%s, %s) failed\n",
 	    this_monitor->pathname, fname);
     return 1;
   }
@@ -493,7 +441,7 @@ static int monitor_disconnect(monitor *this_monitor)
 
   if (0 > close(this_monitor->fd)) {
     fprintf(stderr,
-	    "@monitor_disconnect(): close(fd) %s fails.\n",
+	    "@monitor_disconnect(): close(fd) %s failed\n",
 	    this_monitor->pathname);
     return 1;
   }
@@ -504,74 +452,7 @@ static int monitor_disconnect(monitor *this_monitor)
 
   return 0;
 }
-  
-/* this function derived from APUE */
-static int deepin(char *path)
-{
-  struct stat statbuf;
-  DIR *dp;
-  struct dirent *dep;
-  char *ptr;
-  
-  if (stat(path, &statbuf) < 0) {
-    fprintf(stderr,
-	    "@deepin(): fail to stat %s. %s\n",
-	    path, strerror(errno));
-    return 1;
-  }
-  
-  if (S_ISDIR(statbuf.st_mode) == 0)
-    return 0;
 
-  if (monitor_connect(path)) {
-    fprintf(stderr,
-	    "@deepin(): monitor_connect(%s) fail\n", path);
-    return 1;
-  }
-  
-  ptr = path + strlen(path);
-  *ptr++ = '/';
-  *ptr = 0;
-
-  if ((dp = opendir(path)) == NULL) {
-    fprintf(stderr,
-	    "@deepin(): fail to opendir %s. %s\n",
-	    path, strerror(errno));
-    return 1;
-  }
-
-  while ((dep = readdir(dp)) != NULL) {
-
-    /* '.', '..' and hidden files/dirs are ignored */
-    if (strncmp(dep->d_name, ".", 1) == 0 ||
-	strncmp(dep->d_name, "..", 2) == 0 )
-      continue;
-
-    if (strncpy(ptr, dep->d_name,
-		strlen(dep->d_name)) == NULL) {
-      fprintf(stderr,
-	      "@deepin(): fail to strncpy %s to %s. %s\n",
-	      dep->d_name, path, strerror(errno));
-      return 1;
-    }
-    *(ptr+strlen(dep->d_name)) = 0;
-
-    if (deepin(path)) {
-      fprintf(stderr,
-	      "@deepin(): recurse deepin(%s) error\n",
-	      path);
-      return 1;
-    }
-  }
-  if (closedir(dp) < 0) {
-    fprintf(stderr,
-	    "@deepin(): fail to closedir() %s\n",
-	    path);
-    return 1;
-  }
-
-  return 0;
-}
 
 static void sig_child(int signo)
 {
@@ -579,7 +460,7 @@ static void sig_child(int signo)
   int stat;
 
   if (0 > wait(&stat))
-    perror("@sig_child(): wait child fails.");
+    perror("@sig_child(): wait child failed");
 
   return ;
 }
