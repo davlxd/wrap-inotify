@@ -6,7 +6,7 @@
 
 extern int errno;
 
-int main()
+int main(int argc, char **argv)
 {
   int n;
   fd_set rset;
@@ -14,13 +14,17 @@ int main()
   char *path = "/home/i/foo";
   int mfd;
   int maxfd;
+
+  if (argv[1])
+    path = argv[1];
   
-  if (monitors_init(path,
-		    IN_MODIFY|IN_CREATE|IN_DELETE|
+  if (monitors_init(path, IN_MODIFY|IN_CREATE|IN_DELETE|
 		    IN_MOVED_FROM|IN_MOVED_TO, &mfd)) {
-    fprintf(stderr,
-	    "@main(): monitors_init() failed\n");
-    exit(0);
+    fprintf(stderr, "@main(): monitors_init() failed\n");
+
+    if (monitors_cleanup())
+      fprintf(stderr, "@main(): monitors_cleanup() failed\n");
+    
   }
 
   while(1) {
@@ -46,7 +50,7 @@ int main()
       	if(monitors_cleanup()) {
       	  perror("@main(): monitors_cleanup() failed");
       	  exit(1);
-      	}
+	}
       }
     }
 
@@ -61,5 +65,4 @@ int main()
     }
   }
 
-  return 0;
 }

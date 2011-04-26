@@ -22,6 +22,31 @@
  */
 #include "wrap-inotify.h"
 
+static char fullpath[MAX_PATH_LEN];
+static fd_set set;
+static int maxfd;
+
+/* read and write fd for FIFO */
+static int rfd, wfd;
+
+/* all sub-dirs gonna be monitored under same inotify mask */
+static uint32_t mask;
+
+/* point to current monitor of ddlink,
+ * after recurse iterator, it point to tail of list */
+static monitor *tail_monitor;
+
+static int monitors_poll();
+static void sig_child(int);
+
+static int join_fname(const monitor *, const char *);
+static int monitor_connect(const char *, const struct stat *, 
+			   int , struct FTW *);
+static int monitor_connect_via_fpath(const monitor *, const char *);
+static int monitor_disconnect(monitor *);
+static int monitor_disconnect_via_fpath(const monitor *, const char *);
+
+
 /*
  * arg:root_path -> root directory we monitor,
  * arg:mask -> inotify mask
@@ -32,11 +57,12 @@
  */
 int monitors_init(const char *root_path, uint32_t m, int *fd)
 {
-
+  pid_t pid;
   struct sigaction act, oact;
   act.sa_handler = sig_child;
   sigemptyset(&act.sa_mask);
   act.sa_flags = 0;
+
   if ( 0 > sigaction(SIGCHLD, &act, &oact)) {
     perror("@monitors_init() @parent: sigaction failed");
     return 0;
@@ -102,7 +128,7 @@ int monitors_init(const char *root_path, uint32_t m, int *fd)
   
 
     /* the first-time, iteration, initial doubly linked list */
-    if (nftw(root_path, monitor_connect, 1, FTW_DEPTH) != 0) {
+    if (nftw(root_path, monitor_connect, NFTW_DEPTH, FTW_DEPTH) != 0) {
       perror("@monitor_init() @child: nftw() failed");
       return 1;
     }
@@ -338,7 +364,7 @@ static int monitor_connect_via_fpath(const monitor *this_monitor,
     return 1;
   }
   
-  if (nftw(fullpath, monitor_connect, 1, FTW_DEPTH) != 0) {
+  if (nftw(fullpath, monitor_connect, NFTW_DEPTH, FTW_DEPTH) != 0) {
     perror("@monitor_con_via_fpath(): nftw() failed");
     return 1;
   }
@@ -456,11 +482,13 @@ static int monitor_disconnect(monitor *this_monitor)
 
 static void sig_child(int signo)
 {
-  pid_t pid;
   int stat;
 
   if (0 > wait(&stat))
     perror("@sig_child(): wait child failed");
+
+  // just terminate parent process after child process terminated
+  exit(0);
 
   return ;
 }
