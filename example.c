@@ -22,7 +22,8 @@ int main(int argc, char **argv)
   if (argv[1])
     path = argv[1];
   
-  if (monitors_init(path, IN_MODIFY|IN_CREATE|IN_DELETE|IN_MOVED_FROM|IN_MOVED_TO, &mfd)) {
+  if (monitors_init(path, IN_MODIFY | IN_CREATE | IN_DELETE |
+		    IN_MOVED_FROM | IN_MOVED_TO, &mfd)) {
     fprintf(stderr, "@main(): monitors_init() failed\n");
 
     if (monitors_cleanup())
@@ -30,9 +31,7 @@ int main(int argc, char **argv)
     
   }
   
-
   while(1) {
-    
     FD_SET(fileno(stdin), &rset);
     FD_SET(mfd, &rset);
     maxfd = mfd > fileno(stdin) ? mfd : fileno(stdin);
@@ -69,7 +68,7 @@ int main(int argc, char **argv)
       }
       
       i = 0;
-      while( i < n) {
+      while(i < n) {
 	struct inotify_event *event = (struct inotify_event*)&buffer[i];
 	if ( event->len ) {
 	  if ( event->mask & IN_CREATE ) {

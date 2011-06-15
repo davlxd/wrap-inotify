@@ -78,12 +78,6 @@ int monitors_init(const char *path, uint32_t m, int *fd)
     return 1;
   }
 
-
-  /* if (dup2(pfd[0], *fd) < 0) { */
-  /*   perror("@monitors_init(): dup2() failed"); */
-  /*   return 1; */
-  /* } */
-
   *fd = pfd[0];
    
   inotify_fd = inotify_init();
@@ -132,7 +126,6 @@ static int show_all_monitors()
 
 static int monitors_polling()
 {
-  monitor *temp_monitor;
   int i = 0;
   int len;
   char buf[BUF_LEN];
@@ -142,17 +135,16 @@ static int monitors_polling()
       perror("@thread_new(): read failed");
       return 1;
     }
+
+    /* here I just write what has been read from inotify_fd, nothing more,
+       monitor->pathname may be added by invoking monitor_search() */
     write(pfd[1], buf, len);
 	
     i = 0;
     /* inotify handle routine */
     while (i < len) {
+      
       struct inotify_event *event = (struct inotify_event *)&buf[i];
-      if (!event->len)
-	continue;
-
-      // show_all_monitors();
-
       /* DIR detected*/
       if (event->mask & IN_ISDIR) {
 
@@ -203,16 +195,15 @@ static int monitors_polling()
 
 int monitors_cleanup()
 {
-  monitor *temp_monitor;
+  monitor *temp;
 
   if (pthread_cancel(tid) != 0) {
     perror("@monitors_cleanup(): pthread_cancel() failed");
     return 1;
   }
   
-  for (temp_monitor = monitor_tail; temp_monitor != NULL;
-       temp_monitor = temp_monitor->prev)
-    monitor_disconnect(temp_monitor);
+  for (temp = monitor_tail; temp != NULL; temp = temp->prev)
+    monitor_disconnect(temp);
 
   return 0;
 }
@@ -297,26 +288,26 @@ static int monitor_connect(const char *path, const struct stat *sb,
     return 0;
   
   /* create part */
-  monitor *temp_monitor;
-  temp_monitor = (monitor*)calloc(1, sizeof(monitor));
-  temp_monitor->pathname = (char*)calloc(strlen(path)+1, sizeof(char));
-  if (!strncpy(temp_monitor->pathname, path, strlen(path)+1)) {
+  monitor *temp;
+  temp = (monitor*)calloc(1, sizeof(monitor));
+  temp->pathname = (char*)calloc(strlen(path)+1, sizeof(char));
+  if (!strncpy(temp->pathname, path, strlen(path)+1)) {
     perror("@monitor_connect(): strncpy() failed");
     return 1;
   }
 
-  temp_monitor->wd = inotify_add_watch(inotify_fd, path, mask);
+  temp->wd = inotify_add_watch(inotify_fd, path, mask);
 
   /* connect part */
-  temp_monitor->prev = monitor_tail;
+  temp->prev = monitor_tail;
 
   /* cur->next = temp is omitted if tail_monitor is NULL
-   * which means temp_monitor is head of this linked list
+   * which means temp is head of this linked list
    */
   if (monitor_tail) 
-    monitor_tail->next = temp_monitor;
+    monitor_tail->next = temp;
 
-  monitor_tail = temp_monitor;
+  monitor_tail = temp;
 
   return 0;
 }
