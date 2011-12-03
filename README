@@ -10,7 +10,7 @@ Table of contents :
 ----------------
     Recursively monitor every subdirectories, dynamically add/remove monitors
     if specific events (IN_CREATE/IN_MOVED_TO/IN_DELETE/IN_MOVED_FROM)
-    applied to corresponding subdirectories itself.
+    applied to corresponding subdirectories themselve.
 
 2.  Details
 -----------
