@@ -8,38 +8,41 @@ Table of contents :
 
 1.  Introduction
 ----------------
-    Recursively monitor every sub-directories, dynamically add/remove
-    monitors if specific changes applied to sub-directories itself.
+    Recursively monitor every subdirectories, dynamically add/remove monitors
+    if specific events (IN_CREATE/IN_MOVED_TO/IN_DELETE/IN_MOVED_FROM)
+    applied to corresponding subdirectories itself.
 
 2.  Details
 -----------
     o A thread is created to filter specific directory events in a loop, 
-      so watch descriptor can be add/del dynamically
-    o Iterate all sub-directories by invoking nftw() routine
-
+      so watch descriptors can be added/removed dynamically
+    o Organize all directory watchers as two hashtables and a tree
 
 3.  Usage
 ---------
     #include "wrap-inotify.h"
 
-    int monitors_init(const char *rootpath, uint32_t mask, int *fd);
+    int init_watchers(const char *path, uint32_t mask, int64 size);
 
-        root_path -> path you want to watch
+        path -> path you want to watch
         mask -> watch mask argument for inotify_add_watch()
-        fd -> file descriptor from which you can read() if something happens
+        size -> initial hashtable size (approximate subdirectory amount)
 
-    int monitors_cleanup();
+	This function return a file descriptor which is readable if something
+	detected
+
+    void cleanup_watchers();
 
         This function cleanup everything.
 
 4.  Contacts
 ------------
     Author's E-mail: i@lxd.me
-    Author's Site: http://lxd.me
 
 5.  About License
 -----------------
-    You are free to use this code.
+    sha1.c and sha1.h come from git project, licensed under GPLv2.
+    Other code comes from fss project, licensed under GPLv3
 
 
 

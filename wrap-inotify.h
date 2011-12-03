@@ -1,5 +1,7 @@
 /*
- * wrap inotify, mainly implement recursively monitoring, header file
+ * A Simple interface to inotify Linux subsystem, focusing on recursively
+ * monitoring.
+ *
  *
  * Copyright (c) 2010, 2011 lxd <i@lxd.me>
  * 
@@ -22,35 +24,43 @@
 #ifndef _WRAP_INOTIFY_H_
 #define _WRAP_INOTIFY_H_
 
+#include "utils.h"
+#include <inttypes.h>
 #include <sys/inotify.h>
 
-#ifndef MAX_PATH_LEN
+#define MAX_DIR_LEVEL  MAX_PATH_LEN
 #define MAX_PATH_LEN 1024
-#endif
+#define BUF_LEN 1024
+#define DEPTH_OF_NFTW 10
 
-#ifndef INCLUDE_HIDDEN
-#define INCLUDE_HIDDEN 0
-#endif
+typedef struct _watcher watcher;
+struct _watcher {
+  int wd; // defined by inotify
+  int level; // temporary level in current nftw()
+  char *path;
 
-#define EVENT_SIZE (sizeof(struct inotify_event))
-#define BUF_LEN (1024 *(EVENT_SIZE + 16))
-#define NFTW_DEPTH 20
+  // hashtable linked list chain
+  watcher *chain_wd;
+  watcher *chain_path;
 
-// monitoring STRUCT per sub-directory
-typedef struct monitor
-{
-  char *pathname;
-  int wd;
+  // watcher's connected as tree according to monitored directory structure,
+  // so when sub directores are removed, their corresponding wd(s) can be
+  // removed directly
+  watcher *prev; // refers to father or left-sibling
+  watcher *child;
+  watcher *sibling; // refers to right-sibling
 
-  struct monitor *prev;
-  struct monitor *next;
-} monitor;
+};
+
+typedef struct {
+  watcher* head;
+  watcher* tail;
+  
+} dirlist;
 
 
-/* API */
-int monitors_init(const char *rootpath, uint32_t mask, int *fd);
-int monitors_cleanup();
-
-
+// return a fd from which messages can be read when something happen
+int init_watchers(const char *path, uint32_t mask, uint64_t htbsz);
+void cleanup_watchers();
 
 #endif

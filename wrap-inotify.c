@@ -1,6 +1,6 @@
 /*
- * wrap inotify, mainly implement recursively monitoring.
- * symbolic links is followedd.
+ * A Simple interface to inotify Linux subsystem, focusing on recursively
+ * monitoring.
  *
  *
  * Copyright (c) 2010, 2011 lxd <i@lxd.me>
@@ -23,341 +23,285 @@
 #define _XOPEN_SOURCE 500
 
 #include "wrap-inotify.h"
-#include <ftw.h>
-#include <unistd.h>
-#include <errno.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
+#include "ptrstack.h"
+#include "hashtable.h"
+#include "digest.h"
 #include <pthread.h>
-#include <sys/stat.h>
-
+#include <assert.h>
+#include <ftw.h>
+#include <string.h>
+#include <stdlib.h>
+#include <errno.h>
 extern int errno;
 
-static char rootpath[MAX_PATH_LEN];
+static int pfd[2]; // pipe fd
+static int ifd; // inotify fd
 static pthread_t tid;
 static uint32_t mask;
-static int inotify_fd;
-static int pfd[2];
 
-static monitor *monitor_tail;
+static const char *basepath;
+static watcher *INFO_ROOT;
 
-static void *thread_new(void *arg);
-static int monitors_polling();
-static int show_all_monitors();
-static int monitor_search(int wd, monitor **target);
-static int combine_path(struct inotify_event *, char *);
-static int monitor_connect(const char *, const struct stat *, 
-			   int , struct FTW *);
-static int monitor_connect_recursively(struct inotify_event *event);
-static int monitor_disconnect(monitor *);
-static int monitor_disconnect_recursively(struct inotify_event *event);
+static ptrstack* wtstack;
+static hashtable *hashtb_wd;
+static hashtable *hashtb_path;
 
-
-/*
- * arg:root_path -> root directory we monitor,
- * arg:mask -> inotify mask
- * arg:fd -> file descriptor created
- *
- * return:1 -> error
- * return:0 -> ok
- */
-int monitors_init(const char *path, uint32_t m, int *fd)
+char *pathncat(char *path0, const char *path1, size_t size)
 {
-  size_t path_len;
-  path_len = strlen(path);
+  size_t path0_len = strlen(path0);
+  size_t path1_len = strlen(path1);
+  char *ptr0 = path0 + path0_len;
+  const char *ptr1 = path1;
   
-  strncpy(rootpath, path, path_len+1);
-  if (path_len == '/')
-    rootpath[path_len] = 0;
-
-  mask = m;
-
-  if (pipe(pfd) < 0) {
-    perror("@monitors_init(): pipe() failed");
-    return 1;
+  if (size <= path0_len + path1_len) {
+    fprintf(stderr, "Dst char array is not big enough when copy %s to", path1);
+    exit(EXIT_FAILURE);
   }
 
-  *fd = pfd[0];
-   
-  inotify_fd = inotify_init();
-  if (inotify_fd < 0) {
-    perror("@monitors_init(): inotify_init() failed");
-    return 1;
-  }
-    
-  /* the first-time, iteration, initial doubly linked list */
-  if (nftw(rootpath, monitor_connect, NFTW_DEPTH, FTW_DEPTH) != 0) {
-    perror("@monitors_init(): nftw() failed");
-    return 1;
-  }
-  monitor_tail->next = NULL;
-
-  if (pthread_create(&tid, NULL, thread_new, NULL) < 0) {
-    perror("@monitors_init(): pthread_create() failed");
-    return 1;
+  if (path0_len == 0) {
+    strncpy(ptr0, path1, path1_len+1);
+    return path0;
   }
 
-  return 0;
+  if (*(ptr0 - 1) == '/' && *ptr1 == '/')
+    *(--ptr0) = 0;
+  else if ( *(ptr0 - 1) != '/' && *ptr1 != '/')
+    *ptr0++ = '/';
+
+  strncpy(ptr0, path1, path1_len+1);
+
+  return path0;
+}
+
+char *pathncat2(char *path0, const char *path1, const char *path2,
+		size_t size)
+{
+  pathncat(path0, path1, size);
+  return pathncat(path0, path2, size);
 }
 
 
-static void *thread_new(void *arg)
+static uint64_t hashing_wd(watcher *w)
 {
-  if (monitors_polling()) {
-    fprintf(stderr, "@thread_new(): monitors_polling() failed");
-    return (void*)1;
-  }
+  return w->wd % hashtb_wd->size;
+}
 
-  pthread_exit((void*)0);
+static uint64_t hashing_path(watcher *w)
+{
+  assert(w && w->path);
+  return digest2hashkey(str_digest(w->path), (hashtb_path->size - 1));
+}
+
+static watcher* alloc_watcher(const char *path)
+{
+  size_t pathlen = strlen(path) + 1;
+  void *ptr = calloc(1, sizeof(watcher) + pathlen);
+  watcher *w = (watcher*)ptr;
+
+  w->path = (char*)(ptr + sizeof(watcher));
+  strncpy(w->path, path, pathlen);
+  
+  return w;
 }
 
 
-static int show_all_monitors()
-{
-  monitor *temp;
-
-  for (temp = monitor_tail; temp != NULL; temp = temp->prev)
-    printf("--%s--\n", temp->pathname);
-
-  return 0;
-
-}
-
-static int monitors_polling()
-{
-  int i = 0;
-  int len;
-  char buf[BUF_LEN];
-  
-  while (1) {
-    if (0 > (len = read(inotify_fd, buf, BUF_LEN))) {
-      perror("@thread_new(): read failed");
-      return 1;
-    }
-
-    /* here I just write what has been read from inotify_fd, nothing more,
-       monitor->pathname may be added by invoking monitor_search() */
-    write(pfd[1], buf, len);
-	
-    i = 0;
-    /* inotify handle routine */
-    while (i < len) {
-      
-      struct inotify_event *event = (struct inotify_event *)&buf[i];
-      /* DIR detected*/
-      if (event->mask & IN_ISDIR) {
-
-	/* if CREATE detected, this new dir
-	 * should be added to linked list */
-	if (event->mask & IN_CREATE) {
-	  if (monitor_connect_recursively(event)) {
-	    fprintf(stderr,"@monitors_polling(): monitor_connect_recursively() failed");
-	    return 1;
-	  }
-
-	  /* if DELETE detected, this departed dir
-	   * should be removed from linked list */
-	} else if (event->mask & IN_DELETE) {
-	  if (monitor_disconnect_recursively(event)) {
-	    fprintf(stderr,
-		    "@minitors_poll(): monitor_disconnect_recursively() failed");
-	    return 1;
-	  }
-
-	  /* MOVED_FROM detected, same as DELETE */
-	} else if (event->mask & IN_MOVED_FROM) {
-	  printf("moved from ");
-	  if (monitor_disconnect_recursively(event)) {
-	    fprintf(stderr,
-		    "@minitors_poll(): monitor_disconnect_recursively() failed");
-	    return 1;
-	  }
-
-	  /* MOVED_TO detected, same as CREATE */
-	} else if (event->mask & IN_MOVED_TO) {
-	  printf("moved to ");
-	  if (monitor_connect_recursively(event)) {
-	    fprintf(stderr,"@monitors_polling(): monitor_connect_recursively() failed");
-	    return 1;
-	  }
-
-	}
-
-      }
-	
-      i += sizeof(struct inotify_event) + event->len;
-
-    }  //end while(i < len)
-  }  //end while(1)
-}  //end function
-
-
-int monitors_cleanup()
-{
-  monitor *temp;
-
-  if (pthread_cancel(tid) != 0) {
-    perror("@monitors_cleanup(): pthread_cancel() failed");
-    return 1;
-  }
-  
-  for (temp = monitor_tail; temp != NULL; temp = temp->prev)
-    monitor_disconnect(temp);
-
-  return 0;
-}
-
-
-static int monitor_search(int wd, monitor **target)
-{
-  monitor *temp;
-  for (temp = monitor_tail; temp != NULL; temp = temp->prev)
-    if (temp->wd == wd) {
-      *target = temp;
-      break;
-    }
-  if (temp == NULL) {
-    fprintf(stderr, "@moinitor_search(): failed, wd-%d- invalid\n", wd);
-    return 1;
-  }
-
-  return 0;
-    
-}
-/* connect direcotry's full pathname with file(dir)'s name */
-static int combine_path(struct inotify_event *event, char *fullpath)
-{
-  char *ptr;
-  monitor *temp;
-  
-  if (monitor_search(event->wd, &temp)) {
-    fprintf(stderr, "@combine_path(): monitor_search() failed\n");
-    return 1;
-  }
-  
-  if (!strncpy(fullpath, temp->pathname, strlen(temp->pathname)+1)) {
-    perror("@combine_path: strncpy() failed\n");
-    return 1;
-  }
-
-  ptr = fullpath + strlen(temp->pathname);
-  
-  if (*(ptr-1) != '/') {
-    *ptr++ = '/';
-    *ptr = 0;
-  }
-
-  if (!strncpy(ptr, event->name, strlen(event->name)+1)) {
-    perror("@combine_path: strncpy() failed\n");
-    return 1;
-  }
-
-  return 0;
-}
-
-/* called when a directory is created or moved in at current
- * monitoring directory,
- * iteration nftw() should be invoked here because this
- * new directory may still contain sub-directory*/
-static int monitor_connect_recursively(struct inotify_event *event)
-{
-  char fullpath[MAX_PATH_LEN];
-  
-  if (combine_path(event, fullpath)) {
-    fprintf(stderr,
-	    "@monitor_connect_recursively(): combine_path() failed\n");
-    return 1;
-  }
-  
-  if (nftw(fullpath, monitor_connect, NFTW_DEPTH, FTW_DEPTH) != 0) {
-    perror("@monitor_con_via_fpath(): nftw() failed");
-    return 1;
-  }
-  monitor_tail->next = NULL;
-  
-  return 0;
-}
-  
-
-/* create a linked list node, then add it to linked list */
-static int monitor_connect(const char *path, const struct stat *sb,
-			   int typeflag, struct FTW *fb)
+static int insert_watcher(const char *fullname,
+			  const struct stat *sb,
+			  int info,
+			  struct FTW *ftw)
 {
   if (!S_ISDIR(sb->st_mode))
     return 0;
+  /* if (!include_hidden && IS_HIDDEN(fullname)) */
+  /*   return 0; */
   
-  /* create part */
-  monitor *temp;
-  temp = (monitor*)calloc(1, sizeof(monitor));
-  temp->pathname = (char*)calloc(strlen(path)+1, sizeof(char));
-  if (!strncpy(temp->pathname, path, strlen(path)+1)) {
-    perror("@monitor_connect(): strncpy() failed");
-    return 1;
+
+  watcher *w = alloc_watcher(fullname);
+  w->wd = inotify_add_watch(ifd, fullname, mask);
+  w->level = ftw->level;
+
+  hashtable_insert(hashtb_wd, hashing_wd(w), w);
+  hashtable_insert(hashtb_path, hashing_path(w), w);
+
+  // the following code build tree based on the pattern of level number
+  // of post-order traverse(nftw)
+  while (1) {
+    watcher *top = (watcher*)ptrstack_top(wtstack);
+    if (top == NULL || top->level < ftw->level) {
+      ptrstack_push(wtstack, w);
+      return 0;
+    
+    }else if (top->level == ftw->level) {
+      w->sibling = top;
+      top->prev = w;
+      ptrstack_pop(wtstack);
+      continue;
+      
+    } else {
+      w->child = top;
+      top->prev = w;
+      ptrstack_pop(wtstack);
+      continue;
+    }
   }
 
-  temp->wd = inotify_add_watch(inotify_fd, path, mask);
+}
 
-  /* connect part */
-  temp->prev = monitor_tail;
+static void remove_watcher(void *_w)
+{
+  watcher *w = (watcher*)_w;
+  
+  if (w->prev && w->prev->child == w)
+    w->prev->child = w->sibling;
+  else if (w->prev && w->prev->sibling == w)
+    w->prev->sibling = w->sibling;
+  
+  hashtable_remove(hashtb_wd, hashing_wd(w), w);
+  free(hashtable_remove(hashtb_path, hashing_path(w), w));
+}
 
-  /* cur->next = temp is omitted if tail_monitor is NULL
-   * which means temp is head of this linked list
-   */
-  if (monitor_tail) 
-    monitor_tail->next = temp;
+// post-order
+static void post_traverse_watchers(watcher *w, void (*fn)(watcher *))
+{
+  if (!w) return ;
 
-  monitor_tail = temp;
+  post_traverse_watchers(w->child, fn);
+  post_traverse_watchers(w->sibling, fn);
+  fn(w);
+}
 
+static void insert_watchers_recur(const char *path)
+{
+  int nftw_flags = 0;
+  nftw_flags |= FTW_DEPTH; // Post-order traverse
+  
+  if (nftw(path, insert_watcher, DEPTH_OF_NFTW, nftw_flags) != 0) {
+    perror("nftw() failed");
+    exit(EXIT_FAILURE);
+  }
+  
+  assert(wtstack->stacktop == 1);
+}
+
+static void insert_watcher_child(watcher *father, watcher *w)
+{
+  assert(father && w);
+  
+  w->sibling = father->child;
+  if (father->child)
+    father->child->prev = w;
+  father->child = w;
+  w->prev = father;
+  
+}
+
+static void remove_watchers_recur(watcher *w)
+{
+  post_traverse_watchers(w->child, remove_watcher);
+  remove_watcher(w);
+}
+
+// It is so lucky `wd' start from 1, if not, better split `hit()'
+static int hit(void *_preqw, void *_w)
+{
+  watcher *preqw = (watcher*)_preqw;
+  watcher *w = (watcher*)_w;
+  
+  if (preqw->wd == w->wd)
+    return 1;
+  if (preqw->path && w->path && streq(preqw->path, w->path))
+    return 1;
   return 0;
 }
 
-
-/* called when a directory is removed, we also remove all sub-dir
-   under it via a trick on strncmp */
-static int monitor_disconnect_recursively(struct inotify_event *event)
+static void watchers_polling()
 {
-  monitor *temp;
-  char fullpath[MAX_PATH_LEN];
-
-  if (combine_path(event, fullpath)) {
-    fprintf(stderr,
-	    "@monitor_disconnect_recursively(): combine_path() failed\n");
-    return 1;
-  }
+  int i;
+  watcher preqw, *viewer, *actor, *wtop;
+  char buf[BUF_LEN]; set0(buf);
+  char fullname[MAX_PATH_LEN]; set0(fullname);
+  ssize_t len;
   
-  
-  for (temp = monitor_tail; temp != NULL; temp = temp->prev)
-    /* compare with length of fullpath, so sub-dir will be removed
-     * from linked list, too */
-    if (0 == strncmp(temp->pathname, fullpath, strlen(fullpath)))
-      monitor_disconnect(temp);
+  while (1) {
+    if ((len = read(ifd, buf, BUF_LEN)) < 0) {
+      perror("read from inotify fd failed");
+      exit(EXIT_FAILURE);
+    }
 
-  return 0;
+    // TODO: write raw message to fd, should be refined
+    write(pfd[1], buf, len);
+
+    i = 0;
+    while (i < len) {
+      struct inotify_event *event = (struct inotify_event*)&buf[i];
+	
+      if (event->mask & IN_ISDIR) {
+	set0(preqw);
+	preqw.wd = event->wd;
+	viewer = (watcher*)hashtable_search(hashtb_wd, hashing_wd(&preqw),
+					   &preqw, hit);
+	assert(viewer);
+	
+	set0(fullname);
+	pathncat2(fullname, viewer->path, event->name, MAX_PATH_LEN);
+
+
+	if (event->mask & IN_CREATE || event->mask & IN_MOVED_TO) {
+	  insert_watchers_recur(fullname);
+	  insert_watcher_child(viewer, (watcher*)ptrstack_pop(wtstack));
+	  
+	}else if (event->mask & IN_DELETE || event->mask & IN_MOVED_FROM) {
+	  set0(preqw);
+	  preqw.path = fullname;
+	  actor = (watcher*)hashtable_search(hashtb_path,
+					     hashing_path(&preqw),
+					     &preqw, hit);
+	  assert(actor);
+	  remove_watchers_recur(actor);
+	}
+      }
+
+      i += sizeof(struct inotify_event) + event->len;
+    } // end for `while (i < len) {'
+  } // end for `while (1) {'
 }
 
-/* first disconnect this node from linked list,
- * then free it */
-static int monitor_disconnect(monitor *this_monitor)
+static void *thread_new(void *arg)
 {
-  /* if this_monitor is only node, do nothing */
-  if (!this_monitor->next && !this_monitor->prev)
-    ;
-  else if (!this_monitor->next) {  //tail of linked list
-    this_monitor->prev->next = NULL;
-    monitor_tail = this_monitor->prev;
-  } else if (!this_monitor->prev) { //head of linked list
-    this_monitor->next->prev = NULL;
-  } else {
-    this_monitor->prev->next = this_monitor->next;
-    this_monitor->next->prev = this_monitor->prev;
+  watchers_polling();
+  pthread_exit((void*)0);
+}
+
+int init_watchers(const char *path, uint32_t m, uint64_t htbsz)
+{
+  mask = m;
+  pipe(pfd);
+  basepath = path;
+  
+  wtstack = init_ptrstack(MAX_DIR_LEVEL);
+  hashtb_wd = init_hashtable(htbsz, OFFSETOF(watcher, chain_wd));
+  hashtb_path = init_hashtable(power_of_2_ceiling(htbsz),
+			       OFFSETOF(watcher, chain_path));
+  
+  if ((ifd = inotify_init()) < 0) {
+    perror("inotify_init() failed");
+    exit(EXIT_FAILURE);
   }
 
-  inotify_rm_watch(inotify_fd, this_monitor->wd);
-  
-  free(this_monitor->pathname);
-  free(this_monitor);
+  insert_watchers_recur(basepath);
 
-  return 0;
+  if (pthread_create(&tid, NULL, thread_new, NULL) < 0 ) {
+    perror("pthread_create failed");
+    exit(EXIT_FAILURE);
+  }
+  
+  return pfd[0];
+}
+
+void cleanup_watchers()
+{
+  traverse_hashtable(hashtb_wd, remove_watcher);
+  free_hashtable(hashtb_wd);
+  free_hashtable(hashtb_path);
 }
 
